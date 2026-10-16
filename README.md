@@ -11,6 +11,102 @@ about what SQLite is and how it works from a user's perspective.  This
 README file is about the source code that goes into building SQLite,
 not about how SQLite is used.
 
+<!-- fork-homepage-guide:begin -->
+## A practical starting point for this fork
+
+SQLite is an embedded, serverless SQL database engine written in C. An application
+can link the library directly, while the `sqlite3` shell provides an interactive
+way to inspect SQL and database files. This [hsoliwal fork](https://github.com/hsoliwal/sqlite)
+inherits the [official Git mirror](https://github.com/sqlite/sqlite); SQLite's
+canonical development history is the [Fossil repository](https://sqlite.org/src).
+
+At the reviewed fork default
+[`90687aa`](https://github.com/hsoliwal/sqlite/commit/90687aa700d1d0a7af8fe95f8a4c841df6fa15ba),
+the tree matched the upstream Git mirror. This homepage adds an orientation and
+small exercise; it does not claim a fork-specific engine optimization or an
+official SQLite release. Check [VERSION](VERSION) and [manifest.uuid](manifest.uuid)
+for the checked-out version and official source identity. Preserve the public-domain
+terms and upstream contribution guidance below.
+
+### Key concepts and source map
+
+| Concept | Role | Source to explore |
+| --- | --- | --- |
+| Prepared statement | SQL compiled into an executable program, then stepped and finalized | [Public API template](src/sqlite.h.in) |
+| Parser and planner | Interpret SQL and choose an execution strategy | [SQL grammar](src/parse.y), [planner](src/where.c) |
+| VDBE | Virtual database engine that executes the generated instructions | [vdbe.c](src/vdbe.c) |
+| B-tree | Organizes table and index storage | [btree.c](src/btree.c) |
+| Pager / WAL / VFS | Page caching and transactions, write-ahead logging, and OS access | [pager.c](src/pager.c), [wal.c](src/wal.c), [Unix VFS](src/os_unix.c) |
+| Amalgamation | Generated single-file source distribution, `sqlite3.c` | [Source-generation tools](tool/) |
+
+The command-line shell and the engine are different interfaces. Dot commands
+such as `.headers on` belong to the shell; SQL statements such as `SELECT` belong
+to the engine. Generated `sqlite3.c`, `sqlite3.h` and parser output are build
+products; make source changes in their original inputs instead.
+
+### Quickstart: build the shell outside the source tree
+
+On a Unix-like system, first install a C compiler, Make and the applicable platform
+tools. Core `sqlite3` and amalgamation builds do not require Tcl; development tests
+need Tcl 8.6+ and development libraries. See the full
+[Unix build guide](doc/compile-for-unix.md) and
+[Windows/MSVC guide](doc/compile-for-windows.md).
+
+```sh
+git clone https://github.com/hsoliwal/sqlite.git
+cd sqlite
+git rev-parse HEAD
+mkdir ../sqlite-build
+cd ../sqlite-build
+../sqlite/configure
+make sqlite3
+./sqlite3 --version
+```
+
+Use a fresh sibling build directory. The resulting `./sqlite3` is the locally
+built shell; a bare `sqlite3` command may select a different system installation.
+Do not assume a source checkout or successful compile has passed release testing.
+
+### Worked SQL example: aggregate a disposable in-memory table
+
+From the build directory, run this self-contained shell session:
+
+```sh
+./sqlite3 :memory: <<'SQL'
+.headers on
+.mode column
+CREATE TABLE readings (sensor TEXT NOT NULL, value INTEGER NOT NULL);
+INSERT INTO readings VALUES ('north', 10), ('north', 14), ('south', 7);
+SELECT sensor, count(*) AS samples, avg(value) AS mean
+FROM readings GROUP BY sensor ORDER BY sensor;
+SQL
+```
+
+Expected rows are `north | 2 | 12.0` and `south | 1 | 7.0` (spacing depends on the
+shell). `:memory:` keeps this exercise out of existing database files and its data
+disappears when the process exits. These are expected SQL results, not a captured
+run of this fork. Replace `:memory:` with a new scratch filename only when you want
+to explore persistence.
+
+### Command cheat sheet
+
+| Need | From the build directory |
+| --- | --- |
+| Build the amalgamation | `make sqlite3.c` |
+| Build a database-comparison tool | `make sqldiff` |
+| Inspect configure choices | `../sqlite/configure --help` |
+| Run development tests | `make test` after configuring Tcl development support |
+| Review broader release testing | `make releasetest`; additional tools/configurations are required |
+| Learn the shell | [SQLite CLI documentation](https://sqlite.org/cli.html) |
+| Trace engine architecture | [SQLite architecture](https://sqlite.org/arch.html) and [source tree](src/) |
+
+For a useful report, include the official source identity, Git revision, configure
+options, compiler/OS, SQL reproducer and expected/actual output. Keep production
+databases out of experiments. The upstream sections below explain code authenticity,
+source layout, public-domain status and the appropriate forum for upstream issues.
+
+<!-- fork-homepage-guide:end -->
+
 ## Version Control
 
 SQLite sources are managed using
