@@ -815,10 +815,20 @@ static int patternCompare(
       if( c<0x80 ){
         char zStop[3];
         int bMatch;
+        /* If the next pattern character is an ordinary ASCII character,
+        ** then a candidate position can only match if the next input
+        ** character is nx or ny.  Check that inline, to avoid most of the
+        ** recursive calls.  nx==0 disables this check. */
+        u8 nx = zPattern[0], ny = nx;
+        if( nx>=0x80 || nx==matchAll || nx==matchOne || nx==matchOther ){
+          nx = 0;
+        }
         if( noCase ){
           zStop[0] = sqlite3Toupper(c);
           zStop[1] = sqlite3Tolower(c);
           zStop[2] = 0;
+          nx = sqlite3Toupper(nx);
+          ny = sqlite3Tolower(ny);
         }else{
           zStop[0] = c;
           zStop[1] = 0;
@@ -827,6 +837,7 @@ static int patternCompare(
           zString += strcspn((const char*)zString, zStop);
           if( zString[0]==0 ) break;
           zString++;
+          if( nx && zString[0]!=nx && zString[0]!=ny ) continue;
           bMatch = patternCompare(zPattern,zString,pInfo,matchOther);
           if( bMatch!=SQLITE_NOMATCH ) return bMatch;
         }
@@ -1104,14 +1115,20 @@ static void compileoptiongetFunc(
   int argc,
   sqlite3_value **argv
 ){
-  int n;
+  i64 n;
+  const char *zRes;
   assert( argc==1 );
   UNUSED_PARAMETER(argc);
   /* IMP: R-04922-24076 The sqlite_compileoption_get() SQL function
   ** is a wrapper around the sqlite3_compileoption_get() C/C++ function.
   */
-  n = sqlite3_value_int(argv[0]);
-  sqlite3_result_text(context, sqlite3_compileoption_get(n), -1, SQLITE_STATIC);
+  n = sqlite3_value_int64(argv[0]);
+  /* Use a negative lower bound to assist testing of the
+  ** sqlite3_compileoption_get() C-language interface and its handling
+  ** of negative inputs.
+  **         vvvvv */
+  zRes = (n>=(-10) && n<10000) ? sqlite3_compileoption_get((int)n) : 0;
+  sqlite3_result_text(context, zRes, -1, SQLITE_STATIC);
 }
 #endif /* SQLITE_OMIT_COMPILEOPTION_DIAGS */
 
@@ -2332,7 +2349,7 @@ static void groupConcatInverse(
       pGCC->str.nChar -= nVS;
       memmove(pGCC->str.zText, &pGCC->str.zText[nVS], pGCC->str.nChar);
     }
-    if( pGCC->str.nChar==0 ){
+    if( pGCC->nAccum==0 ){
       pGCC->str.mxAlloc = 0;
       sqlite3_free(pGCC->pnSepLengths);
       pGCC->pnSepLengths = 0;
@@ -2560,11 +2577,11 @@ static void logFunc(
       return;
   }
   if( argc==2 ){
-    switch( sqlite3_value_numeric_type(argv[0]) ){
+    switch( sqlite3_value_numeric_type(argv[1]) ){
       case SQLITE_INTEGER:
       case SQLITE_FLOAT:
         b = log(x);
-        if( b<=0.0 ) return;
+        if( b==0.0 ) return;
         x = sqlite3_value_double(argv[1]);
         if( x<=0.0 ) return;
         break;
@@ -3294,6 +3311,7 @@ static void fpdecodeFunc(
   y = sqlite3_value_int(argv[1]);
   z = sqlite3_value_int(argv[2]);
   if( z<=0 ) z = 1;
+  if( y<-100000000 ) y = -100000000;  /* Same limit as printf() */
   sqlite3FpDecode(&s, x, y, z);
   if( s.isSpecial==2 ){
     sqlite3_snprintf(sizeof(zBuf), zBuf, "NaN");

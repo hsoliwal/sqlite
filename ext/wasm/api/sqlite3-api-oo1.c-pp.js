@@ -15,7 +15,7 @@
   WASM build. It requires that sqlite3-api-glue.js has already run
   and it installs its deliverable as sqlite3.oo1.
 */
-globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
+sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   const toss3 = (...args)=>{throw new sqlite3.SQLite3Error(...args)};
 
   const capi = sqlite3.capi, wasm = sqlite3.wasm, util = sqlite3.util;
@@ -2258,7 +2258,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        that we're generally fetching rows of mixed data types. As of
        3.54, it still behaves that way when passed the undefined value
        resp. is not passed a value, but will coerce each column to the
-       request type of it is not the undefined value. It is not
+       requested type if it is not the undefined value. It is not
        believed that this change adversely affects any existing
        client-level code because this argument was ignored and
        applications passing a non-undefined value were not necessarily

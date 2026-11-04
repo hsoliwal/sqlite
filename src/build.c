@@ -130,6 +130,16 @@ int sqlite3DbMaskAllZero(yDbMask m){
 #endif
 
 /*
+** Do the union all two yDbMask objects into the first.
+*/
+#if SQLITE_MAX_ATTACHED>30
+void sqlite3DbMaskUnion(yDbMask m, yDbMask x){
+  int i;
+  for(i=0; i<sizeof(yDbMask); i++){ m[i] |= x[i]; }
+}
+#endif
+
+/*
 ** This routine is called after a single SQL statement has been
 ** parsed and a VDBE program to execute that statement has been
 ** prepared.  This routine puts the finishing touches on the
@@ -621,10 +631,12 @@ void sqlite3CollapseDatabaseArray(sqlite3 *db){
 
 /*
 ** Reset the schema for the database at index iDb.  Also reset the
-** TEMP schema.  The reset is deferred if db->nSchemaLock is not zero.
-** Deferred resets may be run by calling with iDb<0.
+** TEMP schema.  The reset is deferred if db->nSchemaLock is not zero
+** or if an active VDBE other than pSafe is using iDb
+**
+** Deferred schema resets may be retried by calling with iDb<0.
 */
-void sqlite3ResetOneSchema(sqlite3 *db, int iDb){
+void sqlite3ResetOneSchema(sqlite3 *db, int iDb, Vdbe *pSafe){
   int i;
   assert( iDb<db->nDb );
 
@@ -633,11 +645,19 @@ void sqlite3ResetOneSchema(sqlite3 *db, int iDb){
     DbSetProperty(db, iDb, DB_ResetWanted);
     DbSetProperty(db, 1, DB_ResetWanted);
     db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
+    db->bPendingSchemaReset = 1;
   }
 
   if( db->nSchemaLock==0 ){
+    yDbMask m;
+    sqlite3VdbeSchemaInUse(db, pSafe, &m);
+    db->bPendingSchemaReset = 0;
     for(i=0; i<db->nDb; i++){
-      if( DbHasProperty(db, i, DB_ResetWanted) ){
+      if( !DbHasProperty(db, i, DB_ResetWanted) ){
+        /* no-op */
+      }else if( DbMaskTest(m,i) ){
+        db->bPendingSchemaReset = 1;
+      }else{
         sqlite3SchemaClear(db->aDb[i].pSchema);
         db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
       }
@@ -662,6 +682,7 @@ void sqlite3ResetAllSchemasOfConnection(sqlite3 *db){
       }
     }
   }
+  sqlite3ExpirePreparedStatements(db, 0);
   db->mDbFlags &= ~(DBFLAG_SchemaChange|DBFLAG_SchemaKnownOk);
   sqlite3VtabUnlockList(db);
   sqlite3BtreeLeaveAll(db);
@@ -1087,12 +1108,16 @@ int sqlite3WritableSchema(sqlite3 *db){
 ** When parsing the sqlite_schema table, this routine also checks to
 ** make sure the "type", "name", and "tbl_name" columns are consistent
 ** with the SQL.
+**
+** If shadow tables are read-only, names that are shadow table names
+** of a virtual table in schema zDb are also reserved.
 */
 int sqlite3CheckObjectName(
   Parse *pParse,            /* Parsing context */
   const char *zName,        /* Name of the object to check */
   const char *zType,        /* Type of this object */
-  const char *zTblName      /* Parent table name for triggers and indexes */
+  const char *zTblName,     /* Parent table name for triggers and indexes */
+  const char *zDb           /* Schema in which the object will be created */
 ){
   sqlite3 *db = pParse->db;
   if( sqlite3WritableSchema(db)
@@ -1112,7 +1137,8 @@ int sqlite3CheckObjectName(
     }
   }else{
     if( (pParse->nested==0 && 0==sqlite3StrNICmp(zName, "sqlite_", 7))
-     || (sqlite3ReadOnlyShadowTables(db) && sqlite3ShadowTableName(db, zName))
+     || (sqlite3ReadOnlyShadowTables(db)
+         && sqlite3ShadowTableName(db, zName, zDb))
     ){
       sqlite3ErrorMsg(pParse, "object name reserved for internal use: %s",
                       zName);
@@ -1299,10 +1325,14 @@ void sqlite3StartTable(
     if( IN_RENAME_OBJECT ){
       sqlite3RenameTokenMap(pParse, (void*)zName, pName);
     }
+    if( SQLITE_OK!=sqlite3ReadSchema(pParse) ){
+      goto begin_table_error;
+    }
   }
   pParse->sNameToken = *pName;
   if( zName==0 ) return;
-  if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
+  if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName,
+                             db->aDb[iDb].zDbSName) ){
     goto begin_table_error;
   }
   if( db->init.iDb==1 ) isTemp = 1;
@@ -1336,9 +1366,6 @@ void sqlite3StartTable(
   */
   if( !IN_SPECIAL_PARSE ){
     char *zDb = db->aDb[iDb].zDbSName;
-    if( SQLITE_OK!=sqlite3ReadSchema(pParse) ){
-      goto begin_table_error;
-    }
     pTable = sqlite3FindTable(db, zName, zDb);
     if( pTable ){
       if( !noErr ){
@@ -2649,21 +2676,34 @@ void sqlite3MarkAllShadowTablesOf(sqlite3 *db, Table *pTab){
 
 #ifndef SQLITE_OMIT_VIRTUALTABLE
 /*
-** Return true if zName is a shadow table name in the current database
-** connection.
+** Return true if zName is the name of a shadow table of a virtual table
+** in schema zDb.  If zDb is NULL, return true if zName is a shadow table
+** name of a virtual table in any schema of the database connection.
+**
+** Each schema is checked separately.  An ordinary table in one schema
+** (for example, a TEMP table) must not hide a same-named virtual table
+** in another schema.
 */
-int sqlite3ShadowTableName(sqlite3 *db, const char *zName){
+int sqlite3ShadowTableName(sqlite3 *db, const char *zName, const char *zDb){
   const char *zTail;            /* Pointer to the last "_" in zName */
   Table *pTab;                  /* Table that zName is a shadow of */
   char *zCopy;                  /* Transient copy of zName after last "_" */
+  int i;                        /* Loop counter over schemas */
+  int bRet = 0;                 /* Return value */
   zTail = strrchr(zName, '_');
   if( zTail==0 ) return 0;
   zCopy = sqlite3DbStrNDup(db, zName, (int)(zTail-zName));
-  pTab = zCopy ? sqlite3FindTable(db, zCopy, 0) : 0;
+  if( zCopy==0 ) return 0;
+  for(i=0; i<db->nDb && bRet==0; i++){
+    const char *zSchema = db->aDb[i].zDbSName;
+    if( zDb && sqlite3DbIsNamed(db, i, zDb)==0 ) continue;
+    pTab = sqlite3FindTable(db, zCopy, zSchema);
+    if( pTab && IsVirtual(pTab) ){
+      bRet = sqlite3IsShadowTableOf(db, pTab, zName);
+    }
+  }
   sqlite3DbFree(db, zCopy);
-  if( pTab==0 ) return 0;
-  if( !IsVirtual(pTab) ) return 0;
-  return sqlite3IsShadowTableOf(db, pTab, zName);
+  return bRet;
 }
 #endif /* ifndef SQLITE_OMIT_VIRTUALTABLE */
 
@@ -2732,7 +2772,10 @@ void sqlite3EndTable(
   p = pParse->pNewTable;
   if( p==0 ) return;
 
-  if( pSelect==0 && sqlite3ShadowTableName(db, p->zName) ){
+  if( pSelect==0
+   && sqlite3ShadowTableName(db, p->zName,
+              db->aDb[sqlite3SchemaToIndex(db, p->pSchema)].zDbSName)
+  ){
     p->tabFlags |= TF_Shadow;
   }
 
@@ -4153,7 +4196,9 @@ void sqlite3CreateIndex(
     zName = sqlite3NameFromToken(db, pName);
     if( zName==0 ) goto exit_create_index;
     assert( pName->z!=0 );
-    if( SQLITE_OK!=sqlite3CheckObjectName(pParse, zName,"index",pTab->zName) ){
+    if( SQLITE_OK!=sqlite3CheckObjectName(pParse, zName, "index",
+                                          pTab->zName, db->aDb[iDb].zDbSName)
+    ){
       goto exit_create_index;
     }
     if( !IN_RENAME_OBJECT ){
@@ -4732,8 +4777,8 @@ void sqlite3DropIndex(Parse *pParse, SrcList *pName, int ifExists){
        db->aDb[iDb].zDbSName, pIndex->zName
     );
     sqlite3ClearStatTables(pParse, iDb, "idx", pIndex->zName);
-    sqlite3ChangeCookie(pParse, iDb);
     destroyRootPage(pParse, pIndex->tnum, iDb);
+    sqlite3ChangeCookie(pParse, iDb);
     sqlite3VdbeAddOp4(v, OP_DropIndex, iDb, 0, 0, pIndex->zName, 0);
   }
 

@@ -17,12 +17,11 @@
   (e.g. sqlite3-api-oo1.js) have all of the infrastructure that they
   need.
 */
-globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
+sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   'use strict';
   const toss = (...args)=>{throw new Error(args.join(' '))};
   const capi = sqlite3.capi, wasm = sqlite3.wasm, util = sqlite3.util;
-  globalThis.WhWasmUtilInstaller(wasm);
-  delete globalThis.WhWasmUtilInstaller;
+  WhWasmUtilInstaller(wasm)/*injected via preprocessor*/;
 
   if(0){
     /**
@@ -763,7 +762,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
      Prepare JS<->C struct bindings for the non-opaque struct types we
      need...
   */
-  sqlite3.StructBinder = globalThis.Jaccwabyt({
+  sqlite3.StructBinder = Jaccwabyt({/*injected via preprocessor*/
     heap: wasm.heap8u,
     alloc: wasm.alloc,
     dealloc: wasm.dealloc,
@@ -774,7 +773,6 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
                      later: it probably should have been '$$', but see
                      the previous sentence.) */ '$'
   });
-  delete globalThis.Jaccwabyt;
 
   {// wasm.xWrap() bindings...
 
@@ -789,8 +787,8 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        The 'string:static' argument adapter treats its argument as
        either...
 
-       - WASM pointer: assumed to be a long-lived C-string which gets
-         returned as-is.
+       - If wasm.isPtr(v) is true it is assumed to be a long-lived
+         C-string pointer which gets returned as-is.
 
        - Anything else: gets coerced to a JS string for use as a map
          key. If a matching entry is found (as described next), it is
@@ -812,8 +810,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       function(v){
         if(wasm.isPtr(v)) return v;
         v = ''+v;
-        let rc = this[v];
-        return rc || (this[v] = wasm.allocCString(v));
+        return this[v] ??= wasm.allocCString(v);
       }.bind(Object.create(null))
     );
 
@@ -1605,8 +1602,8 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
         return __bindText(pStmt, iCol, text, nText, xDestroy);
       }else if(text instanceof ArrayBuffer){
         text = new Uint8Array(text);
-      }else if(Array.isArray(pMem)){
-        text = pMem.join('');
+      }else if(Array.isArray(text)){
+        text = text.join('');
       }
       let p, n;
       try{
@@ -1614,7 +1611,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           p = wasm.allocFromTypedArray(text);
           n = text.byteLength;
         }else if('string'===typeof text){
-          [p, n] = wasm.allocCString(text);
+          [p, n] = wasm.allocCString(text, true);
         }else{
           return util.sqlite3__wasm_db_error(
             capi.sqlite3_db_handle(pStmt), capi.SQLITE_MISUSE,
@@ -1648,7 +1645,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           p = wasm.allocFromTypedArray(pMem);
           n = nMem>=0 ? nMem : pMem.byteLength;
         }else if('string'===typeof pMem){
-          [p, n] = wasm.allocCString(pMem);
+          [p, n] = wasm.allocCString(pMem, true);
         }else{
           return util.sqlite3__wasm_db_error(
             capi.sqlite3_db_handle(pStmt), capi.SQLITE_MISUSE,
