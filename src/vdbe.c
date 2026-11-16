@@ -2978,7 +2978,7 @@ case OP_IfNullRow: {         /* jump */
   assert( pOp->p1>=0 && pOp->p1<p->nCursor );
   pC = p->apCsr[pOp->p1];
   if( pC && pC->nullRow ){
-    sqlite3VdbeMemSetNull(aMem + pOp->p3);
+    if( pOp->p3>0 ) sqlite3VdbeMemSetNull(aMem + pOp->p3);
     goto jump_to_p2;
   }
   break;
@@ -3495,11 +3495,11 @@ case OP_TypeCheck: {
             testcase( pIn1->u.i==-140737488355329LL );
             if( pIn1->u.i<=140737488355327LL && pIn1->u.i>=-140737488355328LL){
               pIn1->flags |= MEM_IntReal;
-              pIn1->flags &= ~MEM_Int;
+              pIn1->flags &= ~(MEM_Int|MEM_Str);
             }else{
               pIn1->u.r = (double)pIn1->u.i;
               pIn1->flags |= MEM_Real;
-              pIn1->flags &= ~MEM_Int;
+              pIn1->flags &= ~(MEM_Int|MEM_Str);
             }
           }else if( (pIn1->flags & (MEM_Real|MEM_IntReal))==0 ){
             goto vdbe_type_error;
@@ -3642,7 +3642,7 @@ case OP_MakeRecord: {
       applyAffinity(pRec, zAffinity[0], encoding);
       if( zAffinity[0]==SQLITE_AFF_REAL && (pRec->flags & MEM_Int) ){
         pRec->flags |= MEM_IntReal;
-        pRec->flags &= ~(MEM_Int);
+        pRec->flags &= ~(MEM_Int|MEM_Str);
       }
       REGISTER_TRACE((int)(pRec-aMem), pRec);
       zAffinity++;
@@ -4489,7 +4489,10 @@ case OP_SetCookie: {
 **
 ** Open a read/write cursor named P1 on the table or index whose root
 ** page is P2 (or whose root page is held in register P2 if the
-** OPFLAG_P2ISREG bit is set in P5 - see below).
+** OPFLAG_P2ISREG bit is set in P5 - see below). The database file is
+** determined by P3.  P3==0 means the main database, P3==1 means the
+** database used for temporary tables, and P3>1 means used the
+** corresponding attached database.
 **
 ** The P4 value may be either an integer (P4_INT32) or a pointer to
 ** a KeyInfo structure (P4_KEYINFO). If it is a pointer to a KeyInfo
@@ -5675,7 +5678,7 @@ case OP_SeekRowid: {        /* jump0, in3, ncycle */
     ** changing the datatype of pIn3, however, as it is used by other
     ** parts of the prepared statement. */
     Mem x = pIn3[0];
-    if( x.flags & MEM_Str ){
+    if( (x.flags & (MEM_Str|MEM_Int|MEM_Real|MEM_IntReal))==MEM_Str ){
       applyNumericAffinity(&x, 1);
     }
     if( x.flags & MEM_Int ){
@@ -7183,6 +7186,21 @@ case OP_Destroy: {     /* out2 */
   }
   break;
 }
+
+/*
+** Opcode: DbLock
+**
+** Raise an SQLITE_LOCKED error if there are any other reader statements
+** currently active.
+*/
+case OP_DbLock: {
+  if( db->nVdbeRead>1 ){
+    rc = SQLITE_LOCKED;
+    p->errorAction = OE_Abort;
+    goto abort_due_to_error;
+  }
+  break;
+};
 
 /* Opcode: Clear P1 P2 P3
 **

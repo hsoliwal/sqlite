@@ -1732,7 +1732,7 @@ struct sqlite3 {
   int nextPagesize;             /* Pagesize after VACUUM if >0 */
   i64 nChange;                  /* Value returned by sqlite3_changes() */
   i64 nTotalChange;             /* Value returned by sqlite3_total_changes() */
-  u32 dbOptFlags;               /* Flags to enable/disable optimizations */
+  u64 dbOptFlags;               /* Flags to enable/disable optimizations */
   int aLimit[SQLITE_N_LIMIT];   /* Limits */
   int nMaxSorterMmap;           /* Maximum size of regions mapped by sorter */
   struct sqlite3InitInfo {      /* Information used during initialization */
@@ -1960,7 +1960,7 @@ struct sqlite3 {
 #define SQLITE_SeekScan       18 /* The OP_SeekScan optimization */
 #define SQLITE_OmitOrderBy    19 /* Omit pointless ORDER BY */
 #define SQLITE_BloomFilter    20 /* Use a Bloom filters */
-                          /*  21 -- Available for reuse */
+#define SQLITE_DevTest        21 /* Temporary development testing use */
 #define SQLITE_BalancedMerge  22 /* Balance multi-way merges */
 #define SQLITE_ReleaseReg     23 /* Use OP_ReleaseReg for testing */
 #define SQLITE_FlttnUnionAll  24 /* Disable the UNION ALL flattener */
@@ -1972,12 +1972,13 @@ struct sqlite3 {
 #define SQLITE_StarQuery      30 /* Heurists for star queries */
 #define SQLITE_ExistsToJoin   31 /* The EXISTS-to-JOIN optimization */
 #define SQLITE_UnionLimit     32 /* Optimizations for UNION + LIMIT */
+#define SQLITE_HavingToWhere  33 /* HAVING-to-WHERE optimization */
 
 /*
 ** Macros for testing whether or not optimizations are enabled or disabled.
 */
-#define OptimizationDisabled(D,M)  (((D)->dbOptFlags&(1ul<<((M)-1)))!=0)
-#define OptimizationEnabled(D,M)   (((D)->dbOptFlags&(1ul<<((M)-1)))==0)
+#define OptimizationDisabled(D,M)  (((D)->dbOptFlags&(1ull<<((M)-1)))!=0)
+#define OptimizationEnabled(D,M)   (((D)->dbOptFlags&(1ull<<((M)-1)))==0)
 
 /*
 ** Return true if it OK to factor constant expressions into the initialization
@@ -3285,6 +3286,7 @@ struct ExprList {
       unsigned bNulls :1;     /* True if explicit "NULLS FIRST/LAST" */
       unsigned bUsed :1;      /* This column used in a SF_NestedFrom subquery */
       unsigned bUsingTerm:1;  /* Term from the USING clause of a NestedFrom */
+      unsigned bStarName:1;   /* RENAME only: zEName from expanding a "*" */
       unsigned bNoExpand: 1;  /* Term is an auxiliary in NestedFrom and should
                               ** not be expanded by "*" in parent queries */
     } fg;
@@ -3999,7 +4001,6 @@ struct Parse {
 
   int aTempReg[8];        /* Holding area for temporary registers */
   Parse *pOuterParse;     /* Outer Parse object when nested */
-  Token sNameToken;       /* Token with unqualified schema object name */
   u32 oldmask;            /* Mask of old.* columns referenced */
   u32 newmask;            /* Mask of new.* columns referenced */
   union {
@@ -4028,7 +4029,8 @@ struct Parse {
   ** first field in the recursive region.
   ************************************************************************/
 
-  Token sLastToken;       /* The last token parsed */
+  Token sLastToken;         /* The last token parsed */
+  Token sNameToken;         /* Token with unqualified schema object name */
   ynVar nVar;               /* Number of '?' variables seen in the SQL so far */
   u64 aVnbmc[SQLITE_VNBMC]; /* Varible Number Bitmap Cache */
   u8 iPkSortOrder;          /* ASC or DESC for INTEGER PRIMARY KEY */
@@ -4152,6 +4154,13 @@ struct AuthContext {
 **
 ** The "step_list" member points to the first element of a linked list
 ** containing the SQL statements specified as the trigger program.
+**
+** Trigger.nSelect is a copy of the Parse.nSelect value from when the 
+** trigger and its steps were parsed. There are no Select.selId values 
+** equal to or greater than this anywhere in the trigger program. 
+** Initializing the Parse.nSelect field to this value before coding
+** the trigger program based on these structures ensures that no duplicate
+** selId values are assigned.
 */
 struct Trigger {
   char *zName;            /* The name of the trigger                        */
@@ -4159,6 +4168,7 @@ struct Trigger {
   u8 op;                  /* One of TK_DELETE, TK_UPDATE, TK_INSERT         */
   u8 tr_tm;               /* One of TRIGGER_BEFORE, TRIGGER_AFTER */
   u8 bReturning;          /* This trigger implements a RETURNING clause */
+  int nSelect;            /* Upper bound on Select.selId in this trigger */
   Expr *pWhen;            /* The WHEN clause of the expression (may be NULL) */
   IdList *pColumns;       /* If this is an UPDATE OF <column-list> trigger,
                              the <column-list> is stored here */

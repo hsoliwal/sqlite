@@ -163,11 +163,15 @@ void sqlite3BeginTrigger(
   ** then set iDb to 1 to create the trigger in the temporary database.
   ** If sqlite3SrcListLookup() returns 0, indicating the table does not
   ** exist, the error is caught by the block below.
-  */
-  pTab = sqlite3SrcListLookup(pParse, pTableName);
-  if( db->init.busy==0 && pName2->n==0 && pTab
-        && pTab->pSchema==db->aDb[1].pSchema ){
-    iDb = 1;
+  **
+  ** Do not do this if ALTER TABLE is reparsing an existing trigger. In
+  ** that case iDb is already set correctly. */
+  if( !IN_RENAME_OBJECT ){
+    pTab = sqlite3SrcListLookup(pParse, pTableName);
+    if( db->init.busy==0 && pName2->n==0 && pTab
+          && pTab->pSchema==db->aDb[1].pSchema ){
+      iDb = 1;
+    }
   }
 
   /* Ensure the table name matches database name and that the table exists */
@@ -341,6 +345,7 @@ void sqlite3FinishTrigger(
   iDb = sqlite3SchemaToIndex(pParse->db, pTrig->pSchema);
   assert( iDb>=00 && iDb<db->nDb );
   pTrig->step_list = pStepList;
+  pTrig->nSelect = pParse->nSelect;
   for(n=0; pStepList; n++){
     pStepList->pTrig = pTrig;
     pStepList = pStepList->pNext;
@@ -1294,6 +1299,7 @@ static TriggerPrg *codeRowTrigger(
   sSubParse.pTriggerTab = pTab;
   sSubParse.pToplevel = pTop;
   sSubParse.pTrigCoded = pTrigger;
+  sSubParse.nSelect = pTrigger->nSelect;
   sSubParse.zAuthContext = pTrigger->zName;
   sSubParse.eTriggerOp = pTrigger->op;
   sSubParse.nQueryLoop = pParse->nQueryLoop;

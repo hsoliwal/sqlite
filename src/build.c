@@ -658,6 +658,7 @@ void sqlite3ResetOneSchema(sqlite3 *db, int iDb, Vdbe *pSafe){
       }else if( DbMaskTest(m,i) ){
         db->bPendingSchemaReset = 1;
       }else{
+        sqlite3ExpireStmtsUsingSchema(db, i, pSafe);
         sqlite3SchemaClear(db->aDb[i].pSchema);
         db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
       }
@@ -1597,15 +1598,14 @@ void sqlite3AddColumn(Parse *pParse, Token sName, Token sType){
   ** by the parser, we can sometimes end up with a typename that ends
   ** with "generated always".  Check for this case and omit the surplus
   ** text. */
-  if( sType.n>=16
-   && sqlite3_strnicmp(sType.z+(sType.n-6),"always",6)==0
-  ){
-    sType.n -= 6;
-    while( ALWAYS(sType.n>0) && sqlite3Isspace(sType.z[sType.n-1]) ) sType.n--;
-    if( sType.n>=9
-     && sqlite3_strnicmp(sType.z+(sType.n-9),"generated",9)==0
+  if( sType.n>=16 && sqlite3_strnicmp(sType.z+(sType.n-6),"always",6)==0 ){
+    u32 nType = sType.n - 6;
+    while( ALWAYS(nType>0) && sqlite3Isspace(sType.z[nType-1]) ) nType--;
+    if( nType>=9 && nType<(sType.n - 6)
+     && sqlite3_strnicmp(sType.z+(nType-9),"generated",9)==0
+     && (nType==9 || sqlite3Isspace(sType.z[nType-10]))
     ){
-      sType.n -= 9;
+      sType.n = nType - 9;
       while( sType.n>0 && sqlite3Isspace(sType.z[sType.n-1]) ) sType.n--;
     }
   }
@@ -4123,9 +4123,13 @@ void sqlite3CreateIndex(
 #ifndef SQLITE_OMIT_TEMPDB
     /* If the index name was unqualified, check if the table
     ** is a temp table. If so, set the database to 1. Do not do this
-    ** if initializing a database schema.
-    */
-    if( !db->init.busy ){
+    ** if initializing a database schema, if ALTER TABLE is reparsing an
+    ** existing index, or if VACUUM is recreating the indexes of a
+    ** database.  */
+    if( !db->init.busy
+     && !IN_RENAME_OBJECT
+     && (db->mDbFlags & DBFLAG_Vacuum)==0
+    ){
       pTab = sqlite3SrcListLookup(pParse, pTblName);
       if( pName2->n==0 && pTab && pTab->pSchema==db->aDb[1].pSchema ){
         iDb = 1;
