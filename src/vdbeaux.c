@@ -794,6 +794,9 @@ int sqlite3VdbeAssertMayAbort(Vdbe *v, int mayAbort){
      || opcode==OP_VCreate
      || opcode==OP_ParseSchema
      || opcode==OP_Function || opcode==OP_PureFunc
+     || opcode==OP_AggStep || opcode==OP_AggInverse
+     || opcode==OP_AggFinal || opcode==OP_AggValue
+     || opcode==OP_VFilter || opcode==OP_VColumn
      || ((opcode==OP_Halt || opcode==OP_HaltIfNull)
       && ((pOp->p1)!=SQLITE_OK && pOp->p2==OE_Abort))
      || (opcode==OP_MustBeInt && pOp->p2==0)
@@ -2366,6 +2369,8 @@ int sqlite3VdbeNextOpcode(
       if( pOp->opcode==OP_OpenRead ) break;
       if( pOp->opcode==OP_OpenWrite && (pOp->p5 & OPFLAG_P2ISREG)==0 ) break;
       if( pOp->opcode==OP_ReopenIdx ) break;     
+      if( pOp->opcode==OP_Clear ) break;
+      if( pOp->opcode==OP_Destroy ) break;
     }else
 #endif
     {

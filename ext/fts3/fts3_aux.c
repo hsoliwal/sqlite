@@ -47,7 +47,8 @@ struct Fts3auxCursor {
 ** Schema of the terms table.
 */
 #define FTS3_AUX_SCHEMA \
-  "CREATE TABLE x(term, col, documents, occurrences, languageid HIDDEN)"
+  "CREATE TABLE x(term, col, documents, occurrences, languageid HIDDEN, " \
+  "PRIMARY KEY(term, col, languageid)) WITHOUT ROWID"
 
 /*
 ** This function does all the work for both the xConnect and xCreate methods.
@@ -434,7 +435,7 @@ static int fts3auxFilterMethod(
     }
   }
 
-  if( iLe>=0 && sqlite3_value_type(apVal[0])==SQLITE_TEXT ){
+  if( iLe>=0 && sqlite3_value_type(apVal[iLe])==SQLITE_TEXT ){
     pCsr->zStop = sqlite3_mprintf("%s", sqlite3_value_text(apVal[iLe]));
     if( pCsr->zStop==0 ) return SQLITE_NOMEM;
     pCsr->nStop = (int)strlen(pCsr->zStop);

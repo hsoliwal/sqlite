@@ -269,9 +269,22 @@ static int isLikeOrGlob(
         cnt++;
       }else if( c>=0x80 ){
         const u8 *z2 = z+cnt-1;
-        if( c==0xff || sqlite3Utf8Read(&z2)==0xfffd  /* bad utf-8 */
-         || ENC(db)==SQLITE_UTF16LE 
+        u32 u;
+        if( c==0xff                             /* (1) */
+         || (u = sqlite3Utf8Read(&z2))>=0xfffd  /* (2) */
+         || u==0x7ff                            /* (3) */
+         || ENC(db)==SQLITE_UTF16LE             /* (4) */
         ){
+          /* Do not accept this character as part of the prefix because
+          **   (1)  0xff is not part of any valid UTF-8 character and the
+          **        0xff causes difficult when incrementing to the upper bound
+          **   (2)  0xfffd is not a valid UTF-8 character and values greater
+          **        start getting into the surrogate pairs in UTF16BE.
+          **   (3)  When incrementing this code point to the upper bound,
+          **        that would require adding an extra byte to the UTF-8
+          **   (4)  UTF16LE does not compare in sorted order.  Only
+          **        UTF16BE and UTF8 have that property.
+          */
           cnt--;
           break;
         }else{
@@ -606,7 +619,13 @@ static void whereCombineDisjuncts(
   int idxNew;            /* Index in pWC of the next virtual term */
   Expr *pA, *pB;         /* Expressions associated with pOne and pTwo */
 
-  if( (pOne->wtFlags | pTwo->wtFlags) & TERM_VNULL ) return;
+  if( (pOne->wtFlags | pTwo->wtFlags) & (TERM_VNULL|TERM_LIKEOPT) ){
+    testcase( pOne->wtFlags & TERM_VNULL );
+    testcase( pOne->wtFlags & TERM_LIKEOPT );
+    testcase( pTwo->wtFlags & TERM_VNULL );
+    testcase( pTwo->wtFlags & TERM_LIKEOPT );
+    return;
+  }
   if( (pOne->eOperator & (WO_EQ|WO_LT|WO_LE|WO_GT|WO_GE))==0 ) return;
   if( (pTwo->eOperator & (WO_EQ|WO_LT|WO_LE|WO_GT|WO_GE))==0 ) return;
   if( (eOp & (WO_EQ|WO_LT|WO_LE))!=eOp
@@ -1567,7 +1586,7 @@ exprAnalyze_restart:
   ** the vector on the LHS that the virtual term represents.
   **
   ** This only works if the RHS is a simple SELECT (not a compound) that does
-  ** not use window functions.
+  ** not use window functions or a LIMIT clause.
   */
   else if( pExpr->op==TK_IN
    && pTerm->u.x.iField==0
@@ -1578,6 +1597,8 @@ exprAnalyze_restart:
    && pExpr->x.pSelect->pWin==0
 #endif
    && (pExpr->x.pSelect->selFlags & SF_MinMaxAgg)==0
+   && pExpr->x.pSelect->pLimit==0
+   /* ^-- See bug 2026-11-04T00:59:22Z */
    && pWC->op==TK_AND
    && pExpr->x.pSelect->pEList->nExpr <= UMXV(pTerm->nChild)
    /* ^-- See bug 2026-06-04T10:00:49Z */
