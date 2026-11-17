@@ -5283,10 +5283,14 @@ static int vec1DecodeModel(
 
   /* Check header fields are within the acceptable ranges. This also serves
   ** to ensure that the 32-bit arithmetic used to calculate offsets below
-  ** does not overflow.  */
+  ** does not overflow. 
+  **
+  ** Also check that if the residual flag is set there must be a non-zero
+  ** number of buckets used by the coarse quanitizer.  */
   if( pMod->hdr.nElem>VEC1_VECSIZE_MAX 
    || pMod->hdr.nBucket>VEC1_MAX_BUCKET 
    || pMod->hdr.nCodebook>pMod->hdr.nElem
+   || ((pMod->hdr.flags & VEC1_MODEL_RESIDUAL) && pMod->hdr.nBucket==0)
   ){
     *pzErr = sqlite3_mprintf("vec1: model is corrupt");
     return SQLITE_ERROR;
@@ -6955,7 +6959,7 @@ static const float *vec1TransformInputVector(
     if(
         (pMod->hdr.flags & VEC1_MODEL_WHT)
      || (pMod->hdr.eDistance==VEC1_DISTANCE_COS)
-     || (nCodebook>0 && (nCodebook*pMod->nCodeElem)!=pMod->hdr.nElem)
+     || (nCodebook>0 && (u32)nCodebook*(u32)pMod->nCodeElem!=pMod->hdr.nElem)
     ){
       memcpy(aTmp, aRet, pMod->hdr.nElem * sizeof_f32);
       /* If distance=cos, normalize the vector before applying the WHT
